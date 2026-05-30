@@ -58,6 +58,7 @@ positional target              Target URL
 --log-file PATH                Optional JSONL log file path
 --user-agent VALUE             Custom User-Agent
 --post-data VALUE              POST request body
+--no-progress                  Suppress runtime progress output
 --header "Name: Value"         Repeatable custom HTTP header
 ```
 

@@ -7,12 +7,13 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
@@ -89,6 +90,116 @@ class RateLimiter:
             await asyncio.sleep(wait_for)
 
 
+class ProgressReporter:
+    def __init__(self, enabled: bool = True, stream: TextIO = sys.stderr, interval_seconds: float = 0.5) -> None:
+        self.enabled = enabled
+        self.stream = stream
+        self.interval_seconds = interval_seconds
+        self.interactive = enabled and stream.isatty()
+        self._last_update = 0.0
+        self._current_length = 0
+
+    def update_discovery(
+        self,
+        visited: int,
+        queued: int,
+        discovered: int,
+        max_url: int,
+        errors: int,
+        force: bool = False,
+    ) -> None:
+        self._write(
+            f"[discovery] visited={visited} queued={queued} discovered={discovered} max_url={max_url} errors={errors}",
+            force,
+        )
+
+    def update_scan(
+        self,
+        attempts_done: int,
+        total_attempts: int,
+        endpoints_done: int,
+        total_endpoints: int,
+        errors: int,
+        rate_limit: float,
+        force: bool = False,
+    ) -> None:
+        self._write(
+            "[scan] "
+            f"attempts={attempts_done}/{total_attempts} "
+            f"endpoints={endpoints_done}/{total_endpoints} "
+            f"errors={errors} "
+            f"rate_limit={format_rate_limit(rate_limit)}/s",
+            force,
+        )
+
+    def finish(self) -> None:
+        if not self.interactive or not self._current_length:
+            return
+        self.stream.write("\r" + (" " * self._current_length) + "\r")
+        self.stream.flush()
+        self._current_length = 0
+
+    def _write(self, message: str, force: bool = False) -> None:
+        if not self.interactive:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_update < self.interval_seconds:
+            return
+        padding = max(0, self._current_length - len(message))
+        self.stream.write("\r" + message + (" " * padding))
+        self.stream.flush()
+        self._last_update = now
+        self._current_length = len(message)
+
+
+class ScanProgress:
+    def __init__(
+        self,
+        reporter: ProgressReporter,
+        total_attempts: int,
+        total_endpoints: int,
+        endpoint_attempts: dict[str, int],
+        rate_limit: float,
+    ) -> None:
+        self.reporter = reporter
+        self.total_attempts = total_attempts
+        self.total_endpoints = total_endpoints
+        self.endpoint_attempts = endpoint_attempts
+        self.rate_limit = rate_limit
+        self.attempts_done = 0
+        self.endpoints_done = 0
+        self.errors = 0
+        self._lock = asyncio.Lock()
+
+    async def record_attempt(self, url: str, had_error: bool) -> None:
+        async with self._lock:
+            self.attempts_done += 1
+            if had_error:
+                self.errors += 1
+            remaining = self.endpoint_attempts.get(url)
+            if remaining is not None:
+                remaining -= 1
+                if remaining <= 0:
+                    self.endpoints_done += 1
+                    self.endpoint_attempts.pop(url, None)
+                else:
+                    self.endpoint_attempts[url] = remaining
+            self.reporter.update_scan(
+                self.attempts_done,
+                self.total_attempts,
+                self.endpoints_done,
+                self.total_endpoints,
+                self.errors,
+                self.rate_limit,
+            )
+
+
+def format_rate_limit(rate_limit: float) -> str:
+    if isinstance(rate_limit, int):
+        return str(rate_limit)
+    return str(int(rate_limit)) if rate_limit.is_integer() else str(rate_limit)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Discover same-hostname endpoints and profile HTTP latency."
@@ -104,6 +215,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-file", help="Optional JSONL log file path.")
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help="Custom User-Agent header.")
     parser.add_argument("--post-data", help="POST request body. Defaults to {} only when POST is enabled.")
+    parser.add_argument("--no-progress", action="store_true", help="Suppress runtime progress output.")
     parser.add_argument(
         "--header",
         action="append",
@@ -278,10 +390,15 @@ async def crawl(
     max_depth: int,
     max_url: int,
     rate_limiter: RateLimiter,
+    progress: ProgressReporter | None = None,
 ) -> list[DiscoveredURL]:
     target_hostname = urlparse(target_url).hostname or ""
     discovered: dict[str, int] = {target_url: 0}
     queue: deque[DiscoveredURL] = deque([DiscoveredURL(target_url, 0)])
+    visited = 0
+    discovery_errors = 0
+    if progress:
+        progress.update_discovery(visited, len(queue), len(discovered), max_url, discovery_errors, force=True)
 
     if max_depth >= 1:
         sitemap_urls = await discover_from_sitemap(client, target_url, target_hostname, rate_limiter)
@@ -292,6 +409,8 @@ async def crawl(
                 continue
             discovered[url] = 1
             queue.append(DiscoveredURL(url, 1))
+        if progress:
+            progress.update_discovery(visited, len(queue), len(discovered), max_url, discovery_errors)
 
     fetched_js: set[str] = set()
     while queue and len(discovered) <= max_url:
@@ -299,8 +418,12 @@ async def crawl(
         if current.depth >= max_depth or is_skippable_asset(current.url) or is_js_asset(current.url):
             continue
 
+        visited += 1
         html = await fetch_text(client, current.url, rate_limiter)
         if not html:
+            discovery_errors += 1
+            if progress:
+                progress.update_discovery(visited, len(queue), len(discovered), max_url, discovery_errors)
             continue
 
         endpoints, js_urls = discover_from_html(html, current.url, target_hostname)
@@ -322,7 +445,11 @@ async def crawl(
                 continue
             discovered[url] = next_depth
             queue.append(DiscoveredURL(url, next_depth))
+        if progress:
+            progress.update_discovery(visited, len(queue), len(discovered), max_url, discovery_errors)
 
+    if progress:
+        progress.update_discovery(visited, len(queue), len(discovered), max_url, discovery_errors, force=True)
     return [DiscoveredURL(url, depth) for url, depth in discovered.items()]
 
 
@@ -351,6 +478,7 @@ async def scan_endpoint(
     rate_limiter: RateLimiter,
     log_file: Path,
     log_lock: asyncio.Lock,
+    scan_progress: ScanProgress | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for run_index in range(1, repeat + 1):
@@ -388,6 +516,8 @@ async def scan_endpoint(
                 record["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
                 record["error"] = exc.__class__.__name__
         await write_jsonl(log_file, record, log_lock)
+        if scan_progress:
+            await scan_progress.record_attempt(endpoint.url, bool(record["error"]))
         records.append(record)
     return records
 
@@ -493,11 +623,12 @@ async def run(args: argparse.Namespace) -> None:
     rate_limiter = RateLimiter(args.rate_limit)
     semaphore = asyncio.Semaphore(args.concurrency)
     log_lock = asyncio.Lock()
+    progress = ProgressReporter(enabled=not args.no_progress)
 
     # Redirects are intentionally not followed because a same-hostname URL can
     # redirect to an external hostname, which would expand the requested scope.
     async with httpx.AsyncClient(headers=headers, timeout=timeout, limits=limits, follow_redirects=False) as client:
-        discovered_urls = await crawl(client, target, args.depth, args.max_url, rate_limiter)
+        discovered_urls = await crawl(client, target, args.depth, args.max_url, rate_limiter, progress)
         testable_urls = [
             discovered
             for discovered in discovered_urls
@@ -506,6 +637,15 @@ async def run(args: argparse.Namespace) -> None:
             and not is_dangerous_path(discovered.url)
         ]
 
+        total_attempts = len(testable_urls) * len(methods) * args.repeat
+        scan_progress = ScanProgress(
+            reporter=progress,
+            total_attempts=total_attempts,
+            total_endpoints=len(testable_urls),
+            endpoint_attempts={endpoint.url: len(methods) * args.repeat for endpoint in testable_urls},
+            rate_limit=args.rate_limit,
+        )
+        progress.update_scan(0, total_attempts, 0, len(testable_urls), 0, args.rate_limit, force=True)
         tasks = [
             scan_endpoint(
                 client,
@@ -518,15 +658,26 @@ async def run(args: argparse.Namespace) -> None:
                 rate_limiter,
                 log_file,
                 log_lock,
+                scan_progress,
             )
             for endpoint in testable_urls
             for method in methods
         ]
         nested_records = await asyncio.gather(*tasks)
+        progress.update_scan(
+            scan_progress.attempts_done,
+            total_attempts,
+            scan_progress.endpoints_done,
+            len(testable_urls),
+            scan_progress.errors,
+            args.rate_limit,
+            force=True,
+        )
 
     records = [record for group in nested_records for record in group]
     errors = sum(1 for record in records if record["error"])
     aggregates = aggregate_results(records)
+    progress.finish()
     print_summary(
         target=target,
         urls_discovered=len(discovered_urls),

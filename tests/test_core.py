@@ -1,6 +1,7 @@
 import pytest
 
 from endpointradar import (
+    ProgressReporter,
     aggregate_results,
     discover_from_html,
     is_dangerous_path,
@@ -8,6 +9,7 @@ from endpointradar import (
     is_skippable_asset,
     normalize_target_url,
     normalize_url,
+    parse_args,
 )
 
 
@@ -139,3 +141,77 @@ def test_aggregate_results_computes_avg_min_max() -> None:
     assert result["avg_ms"] == 180
     assert result["min_ms"] == 90
     assert result["max_ms"] == 300
+
+
+def test_parse_args_supports_no_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["endpointradar.py", "https://example.com", "--no-progress"])
+
+    args = parse_args()
+
+    assert args.no_progress is True
+
+
+def test_progress_reporter_disabled_writes_nothing() -> None:
+    class FakeTTY:
+        def __init__(self) -> None:
+            self.output = ""
+
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, value: str) -> int:
+            self.output += value
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    stream = FakeTTY()
+    reporter = ProgressReporter(enabled=False, stream=stream)
+
+    reporter.update_discovery(visited=1, queued=2, discovered=3, max_url=250, errors=0, force=True)
+    reporter.update_scan(
+        attempts_done=1,
+        total_attempts=3,
+        endpoints_done=1,
+        total_endpoints=3,
+        errors=0,
+        rate_limit=5,
+        force=True,
+    )
+    reporter.finish()
+
+    assert stream.output == ""
+
+
+def test_progress_reporter_non_tty_writes_nothing() -> None:
+    class FakeNonTTY:
+        def __init__(self) -> None:
+            self.output = ""
+
+        def isatty(self) -> bool:
+            return False
+
+        def write(self, value: str) -> int:
+            self.output += value
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    stream = FakeNonTTY()
+    reporter = ProgressReporter(enabled=True, stream=stream)
+
+    reporter.update_discovery(visited=1, queued=2, discovered=3, max_url=250, errors=0, force=True)
+    reporter.update_scan(
+        attempts_done=1,
+        total_attempts=3,
+        endpoints_done=1,
+        total_endpoints=3,
+        errors=0,
+        rate_limit=5,
+        force=True,
+    )
+    reporter.finish()
+
+    assert stream.output == ""
