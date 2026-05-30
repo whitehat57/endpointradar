@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
@@ -24,8 +25,8 @@ def _add_candidate(
     if not raw_url:
         return
     normalized = normalize_url(raw_url, base_url)
-    parsed_scheme = normalized.split(":", 1)[0].lower()
-    if parsed_scheme not in {"http", "https"}:
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
         return
     if not is_same_hostname(normalized, target_hostname):
         return
