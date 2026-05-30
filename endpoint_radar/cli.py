@@ -14,7 +14,7 @@ from endpoint_radar.filters import (
     is_skippable_asset,
     normalize_target_url,
 )
-from endpoint_radar.logging_utils import default_log_file
+from endpoint_radar.logging_utils import default_discovery_log_file, default_log_file, write_discovery_jsonl
 from endpoint_radar.progress import ProgressReporter
 from endpoint_radar.scanner import RateLimiter, ScanProgress, aggregate_results, scan_endpoint
 from endpoint_radar.utils import DEFAULT_USER_AGENT
@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help="Custom User-Agent header.")
     parser.add_argument("--post-data", help="POST request body. Defaults to {} only when POST is enabled.")
     parser.add_argument("--no-progress", action="store_true", help="Suppress runtime progress output.")
+    parser.add_argument("--dry-run", action="store_true", help="Run discovery only and skip latency scanning.")
     parser.add_argument(
         "--header",
         action="append",
@@ -103,13 +104,19 @@ def print_summary(
         print()
 
 
+def print_discovery_summary(target: str, urls_discovered: int, log_file: Path) -> None:
+    print("EndpointRadar discovery completed.")
+    print()
+    print(f"Target            : {target}")
+    print(f"URLs discovered   : {urls_discovered}")
+    print(f"Log file          : {log_file}")
+    print()
+    print("No latency scan was performed because --dry-run is enabled.")
+
+
 async def run(args: argparse.Namespace) -> None:
     target = normalize_target_url(args.target)
-    methods = parse_methods(args.methods)
     headers = parse_headers(args.header, args.user_agent)
-    if "POST" in methods:
-        headers.setdefault("Content-Type", "application/json")
-    post_data = args.post_data if args.post_data is not None else ("{}" if "POST" in methods else None)
 
     if args.depth < 0:
         raise ValueError("--depth must be 0 or greater.")
@@ -119,12 +126,22 @@ async def run(args: argparse.Namespace) -> None:
         raise ValueError("--concurrency must be 1 or greater.")
     if args.timeout <= 0:
         raise ValueError("--timeout must be greater than 0.")
-    if args.repeat < 1:
-        raise ValueError("--repeat must be 1 or greater.")
     if args.rate_limit < 0:
         raise ValueError("--rate-limit must be 0 or greater.")
+    if not args.dry_run and args.repeat < 1:
+        raise ValueError("--repeat must be 1 or greater.")
+    if args.dry_run:
+        methods: list[str] = []
+        post_data = None
+    else:
+        methods = parse_methods(args.methods)
+        if "POST" in methods:
+            headers.setdefault("Content-Type", "application/json")
+        post_data = args.post_data if args.post_data is not None else ("{}" if "POST" in methods else None)
 
-    log_file = Path(args.log_file) if args.log_file else default_log_file()
+    log_file = Path(args.log_file) if args.log_file else (
+        default_discovery_log_file() if args.dry_run else default_log_file()
+    )
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     timeout = httpx.Timeout(args.timeout)
@@ -138,6 +155,12 @@ async def run(args: argparse.Namespace) -> None:
     # redirect to an external hostname, which would expand the requested scope.
     async with httpx.AsyncClient(headers=headers, timeout=timeout, limits=limits, follow_redirects=False) as client:
         discovered_urls = await crawl(client, target, args.depth, args.max_url, rate_limiter, progress)
+        if args.dry_run:
+            progress.finish()
+            write_discovery_jsonl(log_file, target, discovered_urls)
+            print_discovery_summary(target, len(discovered_urls), log_file)
+            return
+
         testable_urls = [
             discovered
             for discovered in discovered_urls

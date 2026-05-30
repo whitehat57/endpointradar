@@ -42,6 +42,12 @@ With custom headers:
 python endpointradar.py https://example.com --header "Authorization: Bearer TOKEN" --header "Cookie: session=abc"
 ```
 
+Discovery-only dry run:
+
+```bash
+python endpointradar.py https://example.com --dry-run
+```
+
 If the target scheme is missing, EndpointRadar defaults to `https://`.
 
 ## CLI Options
@@ -59,10 +65,13 @@ positional target              Target URL
 --user-agent VALUE             Custom User-Agent
 --post-data VALUE              POST request body
 --no-progress                  Suppress runtime progress output
+--dry-run                      Run discovery only and skip latency scanning
 --header "Name: Value"         Repeatable custom HTTP header
 ```
 
 POST is never used unless `--methods` includes `POST`. If POST is enabled and `--post-data` is omitted, the request body is `{}` and the default `Content-Type` is `application/json`.
+
+When `--dry-run` is enabled, EndpointRadar only performs discovery/crawling. It writes discovered URLs to `logs/endpointradar-discovery-YYYYMMDD-HHMMSS.jsonl` by default and does not run latency scan attempts.
 
 ## Scope and Discovery
 
@@ -98,6 +107,13 @@ Each request attempt is one JSON object line with:
 - `timestamp`
 
 Errors are written to the JSONL log instead of stopping the whole scan.
+
+Dry-run discovery logs are written to `logs/endpointradar-discovery-YYYYMMDD-HHMMSS.jsonl` by default. Each discovered URL is one JSON object line with:
+
+- `target`
+- `url`
+- `depth`
+- `timestamp`
 
 ## Smoke Test
 

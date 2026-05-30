@@ -1,5 +1,10 @@
+import argparse
+import asyncio
+import json
+
 import pytest
 
+from endpoint_radar import cli
 from endpoint_radar.cli import parse_args
 from endpoint_radar.filters import (
     is_dangerous_path,
@@ -11,6 +16,7 @@ from endpoint_radar.filters import (
 from endpoint_radar.parsers import discover_from_html
 from endpoint_radar.progress import ProgressReporter
 from endpoint_radar.scanner import aggregate_results
+from endpoint_radar.utils import DiscoveredURL
 
 
 def test_normalize_target_url_defaults_to_https_and_trailing_slash() -> None:
@@ -151,6 +157,14 @@ def test_parse_args_supports_no_progress(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.no_progress is True
 
 
+def test_parse_args_supports_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["endpointradar.py", "https://example.com", "--dry-run"])
+
+    args = parse_args()
+
+    assert args.dry_run is True
+
+
 def test_progress_reporter_disabled_writes_nothing() -> None:
     class FakeTTY:
         def __init__(self) -> None:
@@ -182,6 +196,85 @@ def test_progress_reporter_disabled_writes_nothing() -> None:
     reporter.finish()
 
     assert stream.output == ""
+
+
+def test_write_discovery_jsonl_writes_expected_fields(tmp_path) -> None:
+    from endpoint_radar.logging_utils import write_discovery_jsonl
+
+    log_file = tmp_path / "discovery.jsonl"
+    discovered_urls = [
+        DiscoveredURL("https://example.com/", 0),
+        DiscoveredURL("https://example.com/about", 1),
+    ]
+
+    write_discovery_jsonl(log_file, "https://example.com/", discovered_urls)
+
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in lines]
+    assert len(records) == 2
+    assert records[0]["target"] == "https://example.com/"
+    assert records[0]["url"] == "https://example.com/"
+    assert records[0]["depth"] == 0
+    assert "timestamp" in records[0]
+    assert set(records[0]) == {"target", "url", "depth", "timestamp"}
+
+
+def test_dry_run_skips_scanning_and_prints_discovery_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    discovered_urls = [
+        DiscoveredURL("https://example.com/", 0),
+        DiscoveredURL("https://example.com/about", 1),
+    ]
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    async def fake_crawl(client, target, depth, max_url, rate_limiter, progress):
+        return discovered_urls
+
+    async def fail_scan(*args, **kwargs):
+        raise AssertionError("scan_endpoint should not be called in dry-run mode")
+
+    monkeypatch.setattr(cli.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(cli, "crawl", fake_crawl)
+    monkeypatch.setattr(cli, "scan_endpoint", fail_scan)
+
+    log_file = tmp_path / "dry-run.jsonl"
+    args = argparse.Namespace(
+        target="example.com",
+        methods="INVALID",
+        depth=2,
+        max_url=250,
+        concurrency=10,
+        rate_limit=5,
+        timeout=15,
+        repeat=0,
+        log_file=str(log_file),
+        user_agent="EndpointRadar/0.1 (+authorized performance testing)",
+        post_data=None,
+        no_progress=True,
+        dry_run=True,
+        header=[],
+    )
+
+    asyncio.run(cli.run(args))
+
+    output = capsys.readouterr().out
+    assert "EndpointRadar discovery completed." in output
+    assert "URLs discovered   : 2" in output
+    assert "No latency scan was performed because --dry-run is enabled." in output
+    assert "Top 3 Slowest Endpoints:" not in output
+    assert len(log_file.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_progress_reporter_non_tty_writes_nothing() -> None:
