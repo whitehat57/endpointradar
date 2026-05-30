@@ -1,16 +1,16 @@
 import pytest
 
-from endpointradar import (
-    ProgressReporter,
-    aggregate_results,
-    discover_from_html,
+from endpoint_radar.cli import parse_args
+from endpoint_radar.filters import (
     is_dangerous_path,
     is_same_hostname,
     is_skippable_asset,
     normalize_target_url,
     normalize_url,
-    parse_args,
 )
+from endpoint_radar.parsers import discover_from_html
+from endpoint_radar.progress import ProgressReporter
+from endpoint_radar.scanner import aggregate_results
 
 
 def test_normalize_target_url_defaults_to_https_and_trailing_slash() -> None:
