@@ -16,6 +16,7 @@ from endpoint_radar.filters import (
 )
 from endpoint_radar.logging_utils import default_discovery_log_file, default_log_file, write_discovery_jsonl
 from endpoint_radar.progress import ProgressReporter
+from endpoint_radar.reporting import write_csv_summary
 from endpoint_radar.scanner import RateLimiter, ScanProgress, aggregate_results, scan_endpoint
 from endpoint_radar.utils import DEFAULT_USER_AGENT
 from endpoint_radar.waf_detector import WAFDetectionResult, detect_waf
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-progress", action="store_true", help="Suppress runtime progress output.")
     parser.add_argument("--dry-run", action="store_true", help="Run discovery only and skip latency scanning.")
     parser.add_argument("--detect-waf", action="store_true", help="Passively detect WAF/CDN metadata.")
+    parser.add_argument("--csv", help="Optional CSV summary path for aggregated scan results.")
     parser.add_argument(
         "--header",
         action="append",
@@ -81,6 +83,7 @@ def print_summary(
     log_file: Path,
     top_slowest: list[dict[str, Any]],
     waf_result: WAFDetectionResult | None = None,
+    csv_file: Path | None = None,
 ) -> None:
     print("EndpointRadar scan completed.")
     print()
@@ -92,6 +95,8 @@ def print_summary(
     print(f"Request attempts  : {request_attempts}")
     print(f"Errors            : {errors}")
     print(f"Log file          : {log_file}")
+    if csv_file:
+        print(f"CSV summary       : {csv_file}")
     print()
     print("Top 3 Slowest Endpoints:")
     print()
@@ -114,6 +119,7 @@ def print_discovery_summary(
     urls_discovered: int,
     log_file: Path,
     waf_result: WAFDetectionResult | None = None,
+    csv_skipped: bool = False,
 ) -> None:
     print("EndpointRadar discovery completed.")
     print()
@@ -122,6 +128,8 @@ def print_discovery_summary(
         print_waf_summary(waf_result)
     print(f"URLs discovered   : {urls_discovered}")
     print(f"Log file          : {log_file}")
+    if csv_skipped:
+        print("CSV summary       : skipped because --dry-run does not perform latency scanning")
     print()
     print("No latency scan was performed because --dry-run is enabled.")
 
@@ -183,7 +191,7 @@ async def run(args: argparse.Namespace) -> None:
         if args.dry_run:
             progress.finish()
             write_discovery_jsonl(log_file, target, discovered_urls)
-            print_discovery_summary(target, len(discovered_urls), log_file, waf_result)
+            print_discovery_summary(target, len(discovered_urls), log_file, waf_result, csv_skipped=bool(args.csv))
             return
 
         testable_urls = [
@@ -234,6 +242,9 @@ async def run(args: argparse.Namespace) -> None:
     records = [record for group in nested_records for record in group]
     errors = sum(1 for record in records if record["error"])
     aggregates = aggregate_results(records)
+    csv_file = Path(args.csv) if args.csv else None
+    if csv_file:
+        write_csv_summary(csv_file, aggregates)
     progress.finish()
     print_summary(
         target=target,
@@ -242,8 +253,9 @@ async def run(args: argparse.Namespace) -> None:
         request_attempts=len(records),
         errors=errors,
         log_file=log_file,
-        top_slowest=aggregates[:3],
+        top_slowest=[item for item in aggregates if isinstance(item["avg_ms"], int)][:3],
         waf_result=waf_result,
+        csv_file=csv_file,
     )
 
 

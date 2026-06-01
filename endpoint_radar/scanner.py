@@ -144,8 +144,6 @@ def aggregate_results(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     aggregates: list[dict[str, Any]] = []
     for (url, method), group_records in grouped.items():
         elapsed = [record["elapsed_ms"] for record in group_records if isinstance(record["elapsed_ms"], int)]
-        if not elapsed:
-            continue
         status_codes = [record["status_code"] for record in group_records if record["status_code"] is not None]
         sizes = [record["content_length"] for record in group_records if isinstance(record["content_length"], int)]
         content_types = [
@@ -157,13 +155,19 @@ def aggregate_results(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "url": url,
                 "method": method,
-                "avg_ms": round(sum(elapsed) / len(elapsed)),
-                "min_ms": min(elapsed),
-                "max_ms": max(elapsed),
+                "avg_ms": round(sum(elapsed) / len(elapsed)) if elapsed else None,
+                "min_ms": min(elapsed) if elapsed else None,
+                "max_ms": max(elapsed) if elapsed else None,
                 "status_codes": status_codes,
                 "size": sizes[-1] if sizes else None,
+                "content_length": sizes[-1] if sizes else None,
                 "content_type": content_types[-1] if content_types else None,
                 "error_count": sum(1 for record in group_records if record["error"]),
+                "attempt_count": len(group_records),
             }
         )
-    return sorted(aggregates, key=lambda item: item["avg_ms"], reverse=True)
+    return sorted(
+        aggregates,
+        key=lambda item: item["avg_ms"] if isinstance(item["avg_ms"], int) else -1,
+        reverse=True,
+    )

@@ -149,6 +149,37 @@ def test_aggregate_results_computes_avg_min_max() -> None:
     assert result["max_ms"] == 300
 
 
+def test_aggregate_results_keeps_all_error_groups_for_reports() -> None:
+    rows = [
+        {
+            "url": "https://example.com/down",
+            "method": "GET",
+            "elapsed_ms": None,
+            "status_code": None,
+            "content_length": None,
+            "content_type": None,
+            "error": "ConnectError",
+        },
+        {
+            "url": "https://example.com/down",
+            "method": "GET",
+            "elapsed_ms": None,
+            "status_code": None,
+            "content_length": None,
+            "content_type": None,
+            "error": "ConnectError",
+        },
+    ]
+
+    result = aggregate_results(rows)[0]
+
+    assert result["avg_ms"] is None
+    assert result["min_ms"] is None
+    assert result["max_ms"] is None
+    assert result["error_count"] == 2
+    assert result["attempt_count"] == 2
+
+
 def test_parse_args_supports_no_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["endpointradar.py", "https://example.com", "--no-progress"])
 
@@ -171,6 +202,14 @@ def test_parse_args_supports_detect_waf(monkeypatch: pytest.MonkeyPatch) -> None
     args = parse_args()
 
     assert args.detect_waf is True
+
+
+def test_parse_args_supports_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["endpointradar.py", "https://example.com", "--csv", "reports/result.csv"])
+
+    args = parse_args()
+
+    assert args.csv == "reports/result.csv"
 
 
 def test_progress_reporter_disabled_writes_nothing() -> None:
@@ -273,6 +312,7 @@ def test_dry_run_skips_scanning_and_prints_discovery_summary(
         no_progress=True,
         dry_run=True,
         detect_waf=False,
+        csv=None,
         header=[],
     )
 

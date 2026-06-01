@@ -20,6 +20,7 @@ EndpointRadar is for discovery and performance profiling only. It does not explo
 - Optional POST scanning only when explicitly enabled.
 - JSONL logs for scan attempts.
 - JSONL logs for discovery-only dry runs.
+- Optional CSV summary export for aggregated scan results.
 - Optional passive WAF/CDN fingerprinting.
 - Minimal stderr progress output during longer runs.
 - Clean stdout summary output.
@@ -85,6 +86,12 @@ Passive WAF/CDN detection with discovery only:
 python endpointradar.py https://example.com --dry-run --detect-waf
 ```
 
+Write an aggregated scan summary CSV:
+
+```bash
+python endpointradar.py https://example.com --csv reports/result.csv
+```
+
 Suppress runtime progress:
 
 ```bash
@@ -114,6 +121,7 @@ positional target              Target URL
 --no-progress                  Suppress runtime progress output
 --dry-run                      Run discovery only and skip latency scanning
 --detect-waf                   Passively detect WAF/CDN metadata
+--csv PATH                     Write aggregated endpoint-method scan summary CSV
 --header "Name: Value"         Repeatable custom HTTP header
 ```
 
@@ -128,6 +136,8 @@ POST is never used unless `--methods` includes `POST`. If POST is enabled and `-
 `--detect-waf` is off by default. When enabled, EndpointRadar sends one normal request to the normalized target URL and inspects response metadata.
 
 `--log-file` overrides the default JSONL path. In normal scan mode it writes raw request attempts. In `--dry-run` mode it writes discovered URLs.
+
+`--csv` writes an aggregated scan summary report. It does not change the raw JSONL log format.
 
 ## Scope Rules
 
@@ -226,6 +236,35 @@ Each request attempt is one JSON object line with:
 
 Errors are logged as JSONL records instead of stopping the whole scan.
 
+## CSV Summary Export
+
+When `--csv PATH` is provided during a normal scan, EndpointRadar writes an aggregated endpoint-method summary CSV after scan aggregation:
+
+```bash
+python endpointradar.py https://example.com --csv reports/result.csv
+```
+
+Parent directories are created automatically, and existing CSV files are overwritten. The CSV is written with UTF-8 encoding using Python's standard `csv` module.
+
+CSV columns:
+
+- `rank`
+- `url`
+- `method`
+- `avg_ms`
+- `min_ms`
+- `max_ms`
+- `error_count`
+- `status_codes`
+- `content_type`
+- `content_length`
+- `category`
+- `notes`
+
+Rows are ranked by `avg_ms` descending. Categories are `fast`, `ok`, `slow`, `very_slow`, or `error`.
+
+When `--dry-run` and `--csv` are used together, no scan summary CSV is created because dry-run mode does not perform latency scanning. The terminal summary reports that CSV export was skipped.
+
 ## Dry-Run Logs
 
 When `--dry-run` is enabled, EndpointRadar performs discovery only and writes discovered URLs to:
@@ -257,6 +296,7 @@ Normal scans print:
 - Total request attempts.
 - Errors.
 - Log file path.
+- CSV summary path, only when `--csv` is enabled.
 - Top 3 slowest endpoints by average latency.
 
 Dry runs print:
@@ -266,6 +306,7 @@ Dry runs print:
 - WAF/CDN result, only when `--detect-waf` is enabled.
 - URLs discovered.
 - Log file path.
+- CSV skipped note, only when `--csv` is also provided.
 - A note that no latency scan was performed.
 
 Runtime progress is written to stderr. In interactive terminals it uses a single updating line. With non-interactive stderr, dynamic carriage-return progress output is suppressed.
@@ -282,10 +323,12 @@ endpoint_radar/filters.py     scope checks, URL normalization, safety filters
 endpoint_radar/logging_utils.py
                               JSONL writing and default log paths
 endpoint_radar/progress.py    runtime progress output
+endpoint_radar/reporting.py   CSV summary export
 endpoint_radar/waf_detector.py
                               passive WAF/CDN fingerprinting
 endpoint_radar/utils.py       shared constants and data structures
 tests/test_core.py            pytest coverage for core behavior
+tests/test_reporting.py       pytest coverage for CSV summary export
 tests/test_waf_detector.py    pytest coverage for passive WAF/CDN detection
 ```
 
@@ -294,7 +337,7 @@ tests/test_waf_detector.py    pytest coverage for passive WAF/CDN detection
 Run syntax checks:
 
 ```bash
-python -m py_compile endpointradar.py endpoint_radar\__init__.py endpoint_radar\cli.py endpoint_radar\crawler.py endpoint_radar\scanner.py endpoint_radar\parsers.py endpoint_radar\filters.py endpoint_radar\logging_utils.py endpoint_radar\progress.py endpoint_radar\waf_detector.py endpoint_radar\utils.py tests\test_core.py tests\test_waf_detector.py
+python -m py_compile endpointradar.py endpoint_radar\__init__.py endpoint_radar\cli.py endpoint_radar\crawler.py endpoint_radar\scanner.py endpoint_radar\parsers.py endpoint_radar\filters.py endpoint_radar\logging_utils.py endpoint_radar\progress.py endpoint_radar\reporting.py endpoint_radar\waf_detector.py endpoint_radar\utils.py tests\test_core.py tests\test_reporting.py tests\test_waf_detector.py
 ```
 
 Run tests:
@@ -316,6 +359,6 @@ GitHub Actions runs the syntax check and pytest on Python 3.10, 3.11, and 3.12 f
 - No form field submission.
 - No vulnerability scanning, fuzzing, brute-forcing, or exploit checks.
 - Passive WAF/CDN detection is best-effort and metadata-based only.
-- No CSV export, dashboard, database storage, or AI analysis.
+- No dashboard, database storage, or AI analysis.
 - JavaScript endpoint extraction is basic string matching.
 - Static assets are skipped as normal crawl targets; JavaScript files are fetched only to extract endpoint candidates.
