@@ -165,6 +165,14 @@ def test_parse_args_supports_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.dry_run is True
 
 
+def test_parse_args_supports_detect_waf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["endpointradar.py", "https://example.com", "--detect-waf"])
+
+    args = parse_args()
+
+    assert args.detect_waf is True
+
+
 def test_progress_reporter_disabled_writes_nothing() -> None:
     class FakeTTY:
         def __init__(self) -> None:
@@ -264,6 +272,7 @@ def test_dry_run_skips_scanning_and_prints_discovery_summary(
         post_data=None,
         no_progress=True,
         dry_run=True,
+        detect_waf=False,
         header=[],
     )
 

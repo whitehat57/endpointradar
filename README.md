@@ -20,6 +20,7 @@ EndpointRadar is for discovery and performance profiling only. It does not explo
 - Optional POST scanning only when explicitly enabled.
 - JSONL logs for scan attempts.
 - JSONL logs for discovery-only dry runs.
+- Optional passive WAF/CDN fingerprinting.
 - Minimal stderr progress output during longer runs.
 - Clean stdout summary output.
 
@@ -72,6 +73,18 @@ Discovery-only dry run:
 python endpointradar.py https://example.com --dry-run
 ```
 
+Passive WAF/CDN detection with a normal scan:
+
+```bash
+python endpointradar.py https://example.com --detect-waf
+```
+
+Passive WAF/CDN detection with discovery only:
+
+```bash
+python endpointradar.py https://example.com --dry-run --detect-waf
+```
+
 Suppress runtime progress:
 
 ```bash
@@ -100,6 +113,7 @@ positional target              Target URL
 --post-data VALUE              POST request body
 --no-progress                  Suppress runtime progress output
 --dry-run                      Run discovery only and skip latency scanning
+--detect-waf                   Passively detect WAF/CDN metadata
 --header "Name: Value"         Repeatable custom HTTP header
 ```
 
@@ -110,6 +124,8 @@ EndpointRadar/0.1 (+authorized performance testing)
 ```
 
 POST is never used unless `--methods` includes `POST`. If POST is enabled and `--post-data` is omitted, the request body is `{}` and the default `Content-Type` is `application/json`.
+
+`--detect-waf` is off by default. When enabled, EndpointRadar sends one normal request to the normalized target URL and inspects response metadata.
 
 ## Scope Rules
 
@@ -145,6 +161,25 @@ EndpointRadar discovers URLs from:
 - `/sitemap.xml` when available.
 
 JavaScript files are fetched only for endpoint extraction. EndpointRadar does not execute JavaScript.
+
+## Passive WAF/CDN Detection
+
+EndpointRadar can perform best-effort passive fingerprinting for common WAF, CDN, reverse proxy, and edge security providers:
+
+```bash
+python endpointradar.py https://example.com --detect-waf
+```
+
+It inspects normal HTTP response metadata only:
+
+- Response headers.
+- Response cookies.
+- Response status code.
+- A small body snippet for generic block or challenge hints.
+
+EndpointRadar does not send attack payloads, suspicious probe paths, bypass attempts, fuzzing traffic, or vulnerability checks. It does not use `wafw00f`.
+
+Results may be incomplete or inaccurate. `unknown` does not mean no WAF or CDN exists. CDN or edge provider detection also does not prove that WAF rules are enabled.
 
 ## Scan Logs
 
@@ -195,6 +230,7 @@ Normal scans print:
 
 - Scan completed message.
 - Target.
+- WAF/CDN result, only when `--detect-waf` is enabled.
 - URLs discovered.
 - URLs tested.
 - Total request attempts.
@@ -206,6 +242,7 @@ Dry runs print:
 
 - Discovery completed message.
 - Target.
+- WAF/CDN result, only when `--detect-waf` is enabled.
 - URLs discovered.
 - Log file path.
 - A note that no latency scan was performed.
@@ -224,6 +261,8 @@ endpoint_radar/filters.py     scope checks, URL normalization, safety filters
 endpoint_radar/logging_utils.py
                               JSONL writing and default log paths
 endpoint_radar/progress.py    runtime progress output
+endpoint_radar/waf_detector.py
+                              passive WAF/CDN fingerprinting
 endpoint_radar/utils.py       shared constants and data structures
 tests/test_core.py            pytest coverage for core behavior
 ```
@@ -233,7 +272,7 @@ tests/test_core.py            pytest coverage for core behavior
 Run syntax checks:
 
 ```bash
-python -m py_compile endpointradar.py endpoint_radar\__init__.py endpoint_radar\cli.py endpoint_radar\crawler.py endpoint_radar\scanner.py endpoint_radar\parsers.py endpoint_radar\filters.py endpoint_radar\logging_utils.py endpoint_radar\progress.py endpoint_radar\utils.py tests\test_core.py
+python -m py_compile endpointradar.py endpoint_radar\__init__.py endpoint_radar\cli.py endpoint_radar\crawler.py endpoint_radar\scanner.py endpoint_radar\parsers.py endpoint_radar\filters.py endpoint_radar\logging_utils.py endpoint_radar\progress.py endpoint_radar\waf_detector.py endpoint_radar\utils.py tests\test_core.py tests\test_waf_detector.py
 ```
 
 Run tests:
@@ -254,6 +293,7 @@ GitHub Actions runs the syntax check and pytest on Python 3.10, 3.11, and 3.12 f
 - No authentication automation or login attempts.
 - No form field submission.
 - No vulnerability scanning, fuzzing, brute-forcing, or exploit checks.
+- Passive WAF/CDN detection is best-effort and metadata-based only.
 - No CSV export, dashboard, database storage, or AI analysis.
 - JavaScript endpoint extraction is basic string matching.
 - Static assets are skipped as normal crawl targets; JavaScript files are fetched only to extract endpoint candidates.

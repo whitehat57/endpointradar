@@ -18,6 +18,7 @@ from endpoint_radar.logging_utils import default_discovery_log_file, default_log
 from endpoint_radar.progress import ProgressReporter
 from endpoint_radar.scanner import RateLimiter, ScanProgress, aggregate_results, scan_endpoint
 from endpoint_radar.utils import DEFAULT_USER_AGENT
+from endpoint_radar.waf_detector import WAFDetectionResult, detect_waf
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--post-data", help="POST request body. Defaults to {} only when POST is enabled.")
     parser.add_argument("--no-progress", action="store_true", help="Suppress runtime progress output.")
     parser.add_argument("--dry-run", action="store_true", help="Run discovery only and skip latency scanning.")
+    parser.add_argument("--detect-waf", action="store_true", help="Passively detect WAF/CDN metadata.")
     parser.add_argument(
         "--header",
         action="append",
@@ -78,10 +80,13 @@ def print_summary(
     errors: int,
     log_file: Path,
     top_slowest: list[dict[str, Any]],
+    waf_result: WAFDetectionResult | None = None,
 ) -> None:
     print("EndpointRadar scan completed.")
     print()
     print(f"Target            : {target}")
+    if waf_result:
+        print_waf_summary(waf_result)
     print(f"URLs discovered   : {urls_discovered}")
     print(f"URLs tested       : {urls_tested}")
     print(f"Request attempts  : {request_attempts}")
@@ -104,14 +109,33 @@ def print_summary(
         print()
 
 
-def print_discovery_summary(target: str, urls_discovered: int, log_file: Path) -> None:
+def print_discovery_summary(
+    target: str,
+    urls_discovered: int,
+    log_file: Path,
+    waf_result: WAFDetectionResult | None = None,
+) -> None:
     print("EndpointRadar discovery completed.")
     print()
     print(f"Target            : {target}")
+    if waf_result:
+        print_waf_summary(waf_result)
     print(f"URLs discovered   : {urls_discovered}")
     print(f"Log file          : {log_file}")
     print()
     print("No latency scan was performed because --dry-run is enabled.")
+
+
+def print_waf_summary(result: WAFDetectionResult) -> None:
+    detected = "yes" if result.detected else "unknown"
+    vendor = result.vendor if result.vendor else "unknown"
+    evidence = ", ".join(result.evidence) if result.evidence else "none"
+    print(f"WAF/CDN detected  : {detected}")
+    print(f"WAF/CDN vendor    : {vendor}")
+    print(f"Category          : {result.category}")
+    print(f"Confidence        : {result.confidence}")
+    print(f"Evidence          : {evidence}")
+    print()
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -154,11 +178,12 @@ async def run(args: argparse.Namespace) -> None:
     # Redirects are intentionally not followed because a same-hostname URL can
     # redirect to an external hostname, which would expand the requested scope.
     async with httpx.AsyncClient(headers=headers, timeout=timeout, limits=limits, follow_redirects=False) as client:
+        waf_result = await detect_waf(client, target) if args.detect_waf else None
         discovered_urls = await crawl(client, target, args.depth, args.max_url, rate_limiter, progress)
         if args.dry_run:
             progress.finish()
             write_discovery_jsonl(log_file, target, discovered_urls)
-            print_discovery_summary(target, len(discovered_urls), log_file)
+            print_discovery_summary(target, len(discovered_urls), log_file, waf_result)
             return
 
         testable_urls = [
@@ -218,6 +243,7 @@ async def run(args: argparse.Namespace) -> None:
         errors=errors,
         log_file=log_file,
         top_slowest=aggregates[:3],
+        waf_result=waf_result,
     )
 
 
