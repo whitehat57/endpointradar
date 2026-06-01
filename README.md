@@ -127,6 +127,8 @@ POST is never used unless `--methods` includes `POST`. If POST is enabled and `-
 
 `--detect-waf` is off by default. When enabled, EndpointRadar sends one normal request to the normalized target URL and inspects response metadata.
 
+`--log-file` overrides the default JSONL path. In normal scan mode it writes raw request attempts. In `--dry-run` mode it writes discovered URLs.
+
 ## Scope Rules
 
 EndpointRadar enforces exact hostname scope.
@@ -176,6 +178,25 @@ It inspects normal HTTP response metadata only:
 - Response cookies.
 - Response status code.
 - A small body snippet for generic block or challenge hints.
+
+Current passive signatures include:
+
+- Cloudflare
+- AWS CloudFront
+- Sucuri
+- Akamai
+- Imperva / Incapsula
+- Fastly
+- Generic reverse proxy or cache headers
+- Generic block or challenge page hints
+
+When enabled, the terminal summary includes:
+
+- `WAF/CDN detected`
+- `WAF/CDN vendor`
+- `Category`
+- `Confidence`
+- `Evidence`
 
 EndpointRadar does not send attack payloads, suspicious probe paths, bypass attempts, fuzzing traffic, or vulnerability checks. It does not use `wafw00f`.
 
@@ -265,6 +286,7 @@ endpoint_radar/waf_detector.py
                               passive WAF/CDN fingerprinting
 endpoint_radar/utils.py       shared constants and data structures
 tests/test_core.py            pytest coverage for core behavior
+tests/test_waf_detector.py    pytest coverage for passive WAF/CDN detection
 ```
 
 ## Development
